@@ -16,4 +16,4 @@ nltk
 gensim
 tenacity
 Pillow
-fitz
+PyMuPDF
