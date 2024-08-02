@@ -1,4 +1,3 @@
-
 import streamlit as st
 import requests
 import json
@@ -148,7 +147,7 @@ def completion_with_backoff(prompt: str, content: str):
         )
         return response
     except Exception as e:
-        print(f"Error calling Azure OpenAI API: {e}")
+        st.error(f"Error calling Azure OpenAI API: {e}")
         return {}
 
 def extract_metadata(content: str):
@@ -196,59 +195,61 @@ def extract_metadata(content: str):
 
     Here is an example JSON format for your response:
 
-    ```json
     [
       {
         "PageNumber": 1,
-        "PageTitle": "Title of the Page",
-        "PageContent": "Exact content of the page formatted with bullet points and subpoints, maintaining the original structure and spacing.",
+        "PageTitle": "Introduction",
+        "PageContent": "<Formatted and Structured Content>",
         "Tables": [
           {
-            "TableTitle": "Title of the Table",
-            "TableContent": "Structured content of the table."
+            "TableTitle": "Example Table",
+            "TableContent": [["Header1", "Header2"], ["Row1Col1", "Row1Col2"], ["Row2Col1", "Row2Col2"]]
           }
         ],
         "Images": [
           {
-            "ImageTitle": "Title of the Image",
-            "ImageDescription": "Description of the image.",
-            "AdditionalMetadata": "Other relevant details about the image."
+            "ImageTitle": "Figure 1",
+            "ImageDescription": "This figure shows...",
+            "image_url": "/path/to/image"
           }
         ]
       },
       ...
     ]
-    ```"""
 
+    Analyze and structure the provided content accordingly."""
+    
     response = completion_with_backoff(prompt, content)
+    
     if not response:
-        print("Empty response from the model")
+        st.error("Received an empty response from Azure OpenAI.")
         return []
 
-    if hasattr(response, 'content'):
-        response_content = response.content
-        response_content = re.sub(r'```json\s*', '', response_content)
-        response_content = re.sub(r'\s*```', '', response_content)
-
-        print(f"Raw response content: {response_content}")  # Debug: print the raw response content
-
-        try:
-            return json.loads(response_content)
-        except json.JSONDecodeError as jde:
-            print(f"Failed to parse JSON: {jde}")
-            match = re.search(r'\{(?:[^{}]|(?R))*\}', response_content)  # Extract the first valid JSON object
-            if match:
-                try:
-                    return json.loads(match.group(0))
-                except json.JSONDecodeError as jde:
-                    print(f"Failed to extract valid JSON from the response: {jde}")
-            return []
-    else:
-        print("The response object does not have a 'content' attribute.")
+    try:
+        # Extract JSON object from the content
+        response_content = response['choices'][0]['message']['content']
+        print(f"Raw response content: {response_content}")  # Debugging output
+        
+        # Sanitize content to extract valid JSON
+        json_start = re.search(r"\[", response_content)
+        json_end = re.search(r"\](?![^\[]*$)", response_content)
+        
+        if json_start and json_end:
+            json_data = response_content[json_start.start():json_end.end()]
+            return json.loads(json_data)
+        else:
+            raise ValueError("Valid JSON not found in the response content")
+    except (json.JSONDecodeError, ValueError, KeyError) as e:
+        st.error(f"Error parsing JSON response: {e}")
         return []
 
-
-
+def validate_json_structure(json_data):
+    required_keys = ['PageNumber', 'PageTitle', 'PageContent', 'Tables', 'Images']
+    for page in json_data:
+        for key in required_keys:
+            if key not in page:
+                st.warning(f"Missing key '{key}' in the JSON structure.")
+    return json_data
 
 def create_word_file(json_data):
     doc = Document()
@@ -256,95 +257,93 @@ def create_word_file(json_data):
     
     for page in json_data:
         doc.add_heading(f"Page {page['PageNumber']}", level=1)
-        doc.add_heading('Header', level=2)
         doc.add_paragraph(page['PageTitle'], style='Heading 2')
+        
         doc.add_heading('Content', level=2)
+        doc.add_paragraph(page['PageContent'])
         
-        content_paragraph = doc.add_paragraph()
-        for line in page['PageContent'].split('\n'):
-            if line.startswith('- '):
-                content_paragraph.add_run(line).bold = True
-            else:
-                content_paragraph.add_run(line)
-            content_paragraph.add_run('\n')
-        
+        # Handle Tables
         if 'Tables' in page and page['Tables']:
             for table in page['Tables']:
-                doc.add_heading('Table', level=2)
-                doc.add_paragraph(f"Title: {table['TableTitle']}")
-                table_data = table['TableContent']
-                table_obj = doc.add_table(rows=1, cols=len(table_data[0]))
+                doc.add_heading(f"Table: {table['TableTitle']}", level=3)
+                table_obj = doc.add_table(rows=1, cols=len(table['TableContent'][0]))
                 hdr_cells = table_obj.rows[0].cells
-                for i, header in enumerate(table_data[0]):
+                for i, header in enumerate(table['TableContent'][0]):
                     hdr_cells[i].text = header
-                for row_data in table_data[1:]:
+                for row_data in table['TableContent'][1:]:
                     row_cells = table_obj.add_row().cells
                     for i, cell_data in enumerate(row_data):
                         row_cells[i].text = cell_data
         
+        # Handle Images
         if 'Images' in page and page['Images']:
             for image in page['Images']:
-                doc.add_heading('Image', level=2)
-                doc.add_paragraph(f"Title: {image['ImageTitle']}")
+                doc.add_heading(f"Image: {image['ImageTitle']}", level=3)
                 doc.add_paragraph(f"Description: {image['ImageDescription']}")
-                doc.add_paragraph(f"Additional Metadata: {image.get('AdditionalMetadata', 'N/A')}")
-                # Add image to the document
-                doc.add_picture(image['image_url'], width=Inches(4))
+                image_path = image['image_url']
+                
+                if Path(image_path).exists():
+                    doc.add_picture(image_path, width=Inches(4))
+                else:
+                    st.warning(f"Image not found: {image_path}")
     
     file_stream = io.BytesIO()
     doc.save(file_stream)
     file_stream.seek(0)
     return file_stream
 
+def main():
+    st.title("Patent Document Metadata Extractor")
 
-
-st.title('Patent Document Processor')
-
-uploaded_file = st.file_uploader("Upload a PPT or PDF file", type=['ppt', 'pptx', 'pdf'])
-
-if uploaded_file is not None:
-    token = get_oauth2_token()
-    if token:
+    # File Upload
+    uploaded_file = st.file_uploader("Upload a PPT file", type=['ppt', 'pptx'])
+    
+    if uploaded_file is not None:
+        # Extract text and images from PDF
+        token = get_oauth2_token()
+        if not token:
+            return
+        
         file_id = upload_file_to_sharepoint(token, uploaded_file)
-        if file_id:
-            pdf_content = convert_file_to_pdf(token, file_id)
-            if pdf_content:
-                pdf_path = "converted_file.pdf"
-                with open(pdf_path, "wb") as f:
-                    f.write(pdf_content)
+        if not file_id:
+            return
+        
+        pdf_content = convert_file_to_pdf(token, file_id)
+        if not pdf_content:
+            return
+        
+        # Save PDF to temporary path
+        with open("temp.pdf", "wb") as temp_pdf_file:
+            temp_pdf_file.write(pdf_content)
+        
+        delete_file_from_sharepoint(token, file_id)
+        
+        text_content = extract_text_from_pdf("temp.pdf")
+        images = extract_images_from_pdf("temp.pdf", "output_images")
+        
+        metadata = extract_metadata(text_content)
+        
+        # Merge images into metadata
+        for image in images:
+            page_num = image['page_number']
+            for page in metadata:
+                if page['PageNumber'] == page_num:
+                    if 'Images' not in page:
+                        page['Images'] = []
+                    page['Images'].append({
+                        "ImageTitle": image['title'],
+                        "ImageDescription": image['description'],
+                        "image_url": image['image_url']
+                    })
+        
+        # Validate JSON Structure
+        metadata = validate_json_structure(metadata)
+        
+        # Create Word file
+        word_file = create_word_file(metadata)
+        
+        # Provide Download Option
+        st.download_button(label="Download Metadata as Word Document", data=word_file, file_name="metadata.docx")
 
-                delete_file_from_sharepoint(token, file_id)
-
-                text_content = extract_text_from_pdf(pdf_path)
-                images = extract_images_from_pdf(pdf_path, 'extracted_images')
-                metadata = extract_metadata(text_content)
-
-                if metadata:
-                    # Integrate image metadata into the extracted metadata
-                    for image in images:
-                        for page in metadata:
-                            if page['PageNumber'] == image['page_number']:
-                                if 'Images' not in page or not page['Images']:
-                                    page['Images'] = []
-                                page['Images'].append({
-                                    "ImageTitle": image['title'],
-                                    "ImageDescription": image['description'],
-                                    "image_url": image['image_url']
-                                })
-
-                    st.json(metadata)
-                    
-                    # Create and download Word file
-                    word_file = create_word_file(metadata)
-                    st.download_button(
-                        label="Download Word file",
-                        data=word_file,
-                        file_name="extracted_metadata.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    )
-            else:
-                st.error("Failed to convert file to PDF.")
-        else:
-            st.error("Failed to upload file to SharePoint.")
-    else:
-        st.error("Failed to obtain OAuth2 token.")
+if __name__ == "__main__":
+    main()
