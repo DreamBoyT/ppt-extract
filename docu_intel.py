@@ -1,3 +1,4 @@
+
 import streamlit as st
 import requests
 import json
@@ -11,6 +12,7 @@ from docx.shared import Inches
 import io
 import re
 from PIL import Image
+from langchain.prompts import PromptTemplate
 
 # Configuration
 GRAPH_TENANT_ID = "4d4343c6-067a-4794-91f3-5cb10073e5b4"
@@ -150,31 +152,43 @@ def completion_with_backoff(prompt: str, content: str):
         return {}
 
 def extract_metadata(content: str):
-    prompt = """Patent Document Analysis Prompt:
+    prompt = """Patent Document Analysis and Formatting Prompt:
 
-    You are an expert tasked with analyzing patent documents. Please thoroughly review the provided patent document and extract the following key information from each page:
+    You are an expert tasked with analyzing and formatting patent documents. Please thoroughly review the provided patent document and extract the following key information from each page, ensuring that the content is neatly formatted with proper titles, bullet points, and subpoints, maintaining the original structure and spacing:
 
     1. Page Number: Identify the page number of the document.
     2. Page Title: Extract the title or heading of the page.
-    3. Page Content: Extract the exact main content and context of the page as it appears in the document, without any summarization.
-    4. Image: Identify and extract any images present on the page along with relevant metadata. This includes the image title, description, and any other pertinent information.
+    3. Page Content: Extract the exact main content and context of the page as it appears in the document, and format it with bullet points and subpoints. Ensure that each topic and subtopic is clearly identified and described in a structured manner, maintaining the original spacing and indentation. Make the topics and subtopics bold.
+    4. Table Content: Identify and extract any tables present on the page, ensuring that the table content is properly structured and formatted.
+    5. Image: Identify and extract any images present on the page along with relevant metadata. This includes the image title, description, and any other pertinent information.
 
     Guidelines:
     - Ensure that all extracted information is factual, accurate, and directly derived from the document.
     - For the "Page Title" and "Image" sections, provide concise and descriptive information.
     - The information should be self-contained, meaning that each extracted piece should make sense independently of the rest of the document.
-    - If any of the required properties are not present on a page, leave those fields empty rather than making assumptions.
+    - For tables, ensure that the content is properly structured and formatted.
     - For images, include detailed metadata such as:
       - Image Title: The title or caption associated with the image.
       - Image Description: A brief description of the image’s content and purpose.
       - Additional Metadata: Any other relevant details, such as image source or reference numbers.
+
+    Formatting Instructions:
+    - Use bullet points for listing items.
+    - Use subpoints for detailed explanations under each main point.
+    - Ensure that each topic and subtopic is clearly identified and described.
+    - Make topics and subtopics bold.
+    - Maintain the original structure, spacing, and indentation of the document.
+    - Ensure that the content is neat and structured throughout the document.
 
     Response Format:
     Answer in JSON format. Each page should be represented as an object with the following keys:
 
     - "PageNumber": The number of the page.
     - "PageTitle": The title of the page as it appears in the document.
-    - "PageContent": The exact main content and context of the page as it appears in the document.
+    - "PageContent": The exact main content and context of the page as it appears in the document, formatted with bullet points and subpoints, maintaining the original structure and spacing.
+    - "Tables": A list of objects containing:
+      - "TableTitle": The title of the table.
+      - "TableContent": The structured content of the table.
     - "Images": A list of objects containing:
       - "ImageTitle": The title of the image.
       - "ImageDescription": A description of the image.
@@ -182,12 +196,18 @@ def extract_metadata(content: str):
 
     Here is an example JSON format for your response:
 
-    json
+    ```json
     [
       {
         "PageNumber": 1,
         "PageTitle": "Title of the Page",
-        "PageContent": "Exact content of the page without any summarization.",
+        "PageContent": "Exact content of the page formatted with bullet points and subpoints, maintaining the original structure and spacing.",
+        "Tables": [
+          {
+            "TableTitle": "Title of the Table",
+            "TableContent": "Structured content of the table."
+          }
+        ],
         "Images": [
           {
             "ImageTitle": "Title of the Image",
@@ -198,8 +218,7 @@ def extract_metadata(content: str):
       },
       ...
     ]
-    """
-
+    ```"""
 
     response = completion_with_backoff(prompt, content)
     if not response:
@@ -208,8 +227,8 @@ def extract_metadata(content: str):
 
     if hasattr(response, 'content'):
         response_content = response.content
-        response_content = re.sub(r'json\s*', '', response_content)
-        response_content = re.sub(r'\s*', '', response_content)
+        response_content = re.sub(r'```json\s*', '', response_content)
+        response_content = re.sub(r'\s*```', '', response_content)
 
         print(f"Raw response content: {response_content}")  # Debug: print the raw response content
 
@@ -228,6 +247,9 @@ def extract_metadata(content: str):
         print("The response object does not have a 'content' attribute.")
         return []
 
+
+
+
 def create_word_file(json_data):
     doc = Document()
     doc.add_heading('Extracted Metadata', 0)
@@ -235,9 +257,30 @@ def create_word_file(json_data):
     for page in json_data:
         doc.add_heading(f"Page {page['PageNumber']}", level=1)
         doc.add_heading('Header', level=2)
-        doc.add_paragraph(page['PageTitle'])
+        doc.add_paragraph(page['PageTitle'], style='Heading 2')
         doc.add_heading('Content', level=2)
-        doc.add_paragraph(page['PageContent'])
+        
+        content_paragraph = doc.add_paragraph()
+        for line in page['PageContent'].split('\n'):
+            if line.startswith('- '):
+                content_paragraph.add_run(line).bold = True
+            else:
+                content_paragraph.add_run(line)
+            content_paragraph.add_run('\n')
+        
+        if 'Tables' in page and page['Tables']:
+            for table in page['Tables']:
+                doc.add_heading('Table', level=2)
+                doc.add_paragraph(f"Title: {table['TableTitle']}")
+                table_data = table['TableContent']
+                table_obj = doc.add_table(rows=1, cols=len(table_data[0]))
+                hdr_cells = table_obj.rows[0].cells
+                for i, header in enumerate(table_data[0]):
+                    hdr_cells[i].text = header
+                for row_data in table_data[1:]:
+                    row_cells = table_obj.add_row().cells
+                    for i, cell_data in enumerate(row_data):
+                        row_cells[i].text = cell_data
         
         if 'Images' in page and page['Images']:
             for image in page['Images']:
@@ -253,7 +296,9 @@ def create_word_file(json_data):
     file_stream.seek(0)
     return file_stream
 
-st.title('PPT Metadata Extractor In JSON')
+
+
+st.title('Patent Document Processor')
 
 uploaded_file = st.file_uploader("Upload a PPT or PDF file", type=['ppt', 'pptx', 'pdf'])
 
