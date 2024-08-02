@@ -1,4 +1,6 @@
 streamlit
+requests
+PyMuPDF==1.19.0 
 langchain
 langchain-core
 langchain-text-splitters
@@ -13,9 +15,5 @@ pypdf
 faiss-cpu
 nltk
 gensim
-json
-pathlib
 tenacity
-python-docx
-Pillow  
-requests
+Pillow
