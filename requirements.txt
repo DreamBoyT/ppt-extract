@@ -1,6 +1,5 @@
 streamlit
 requests
-PyMuPDF==1.19.0 
 langchain
 langchain-core
 langchain-text-splitters
