@@ -195,53 +195,48 @@ def extract_metadata(content: str):
 
     Here is an example JSON format for your response:
 
+    ```json
     [
       {
         "PageNumber": 1,
-        "PageTitle": "Introduction",
-        "PageContent": "<Formatted and Structured Content>",
+        "PageTitle": "Title of the Page",
+        "PageContent": "Exact content of the page formatted with bullet points and subpoints, maintaining the original structure and spacing.",
         "Tables": [
           {
-            "TableTitle": "Example Table",
-            "TableContent": [["Header1", "Header2"], ["Row1Col1", "Row1Col2"], ["Row2Col1", "Row2Col2"]]
+            "TableTitle": "Title of the Table",
+            "TableContent": "Structured content of the table."
           }
         ],
         "Images": [
           {
-            "ImageTitle": "Figure 1",
-            "ImageDescription": "This figure shows...",
-            "image_url": "/path/to/image"
+            "ImageTitle": "Title of the Image",
+            "ImageDescription": "Description of the image.",
+            "AdditionalMetadata": "Other relevant details about the image."
           }
         ]
       },
       ...
     ]
+    ```"""
 
-    Analyze and structure the provided content accordingly."""
-    
     response = completion_with_backoff(prompt, content)
     
-    if not response:
-        st.error("Received an empty response from Azure OpenAI.")
+    if not response or 'choices' not in response or not response['choices']:
+        st.error("Invalid response from Azure OpenAI API.")
+        return []
+    
+    try:
+        response_content = response['choices'][0]['message']['content']
+        response_content = re.sub(r'```json\s*', '', response_content)
+        response_content = re.sub(r'\s*```', '', response_content)
+
+        print(f"Raw response content: {response_content}")  # Debug: print the raw response content
+
+        return json.loads(response_content)
+    except (KeyError, json.JSONDecodeError) as e:
+        st.error(f"Error processing the response: {str(e)}")
         return []
 
-    try:
-        # Extract JSON object from the content
-        response_content = response['choices'][0]['message']['content']
-        print(f"Raw response content: {response_content}")  # Debugging output
-        
-        # Sanitize content to extract valid JSON
-        json_start = re.search(r"\[", response_content)
-        json_end = re.search(r"\](?![^\[]*$)", response_content)
-        
-        if json_start and json_end:
-            json_data = response_content[json_start.start():json_end.end()]
-            return json.loads(json_data)
-        else:
-            raise ValueError("Valid JSON not found in the response content")
-    except (json.JSONDecodeError, ValueError, KeyError) as e:
-        st.error(f"Error parsing JSON response: {e}")
-        return []
 
 def validate_json_structure(json_data):
     required_keys = ['PageNumber', 'PageTitle', 'PageContent', 'Tables', 'Images']
